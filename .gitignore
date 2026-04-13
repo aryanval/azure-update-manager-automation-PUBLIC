@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Logs
+*.log
+logs/*.log
+
+# State files — never commit
+state/
+*.json
+
+# Local SQLite inventory DB — contains VM IPs and patch history, never push
+*.db
+*.sqlite
+*.sqlite3
+
+# Excel output
+reports/*.xlsx
+!reports/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Config — contains subscription IDs and sensitive data
+aum_automation/config/config.yaml
+
+# Backup files
+*.bak
+*.backup

@@ -1,0 +1,94 @@
+# AUM Automation Tool — Configuration Example
+# Copy this file to config.yaml and fill in your details.
+# config.yaml is gitignored and will never be committed.
+
+tenants:
+  # Each key is the display name shown in the tool's tenant dropdown.
+  # Add as many tenants as you manage.
+
+  Production:
+    subscription_id: ""          # Azure subscription ID (UUID format)
+    resource_groups: []          # Leave empty to scan all resource groups,
+                                 # or list specific ones: ["rg-prod-web", "rg-prod-db"]
+    avd_enabled: false           # Set true to create an AVD sheet in Excel reports
+
+  Staging:
+    subscription_ids:            # Use subscription_ids (plural) for multi-subscription tenants
+      - ""
+      - ""
+    resource_groups: []
+    avd_enabled: false
+
+  Development:
+    subscription_id: ""
+    resource_groups: []
+    avd_enabled: false
+
+
+# Patch exclusion rules
+# Patterns matched case-insensitively against patch names / KB IDs.
+patch_exclusions:
+  always_exclude:
+    - "*SQL*"          # SQL Server patches — require separate change management
+    - "*sql*"
+    - "*SqlServer*"
+    - "*MSSQL*"
+  # Add additional exclusions here or via the GUI at runtime
+
+
+# VM skip conditions — VMs with these tags or note keywords are skipped automatically
+skip_conditions:
+  tags:
+    - "PatchStatus=NA"
+    - "Status=Decommissioning"
+    - "PatchingExcluded=true"
+  notes_keywords:
+    - "scheduled for decommissioning"
+    - "do not patch"
+    - "manual patching only"
+
+
+# Excel reporting
+excel:
+  output_directory: "./reports"
+  preserve_deleted_vms: true     # Keep historical records when VMs are removed from Azure
+
+
+# Patch wave failure threshold
+# If this percentage of VMs in a wave fail, subsequent waves are halted.
+wave_failure_threshold_pct: 30.0
+
+
+# Retry configuration (for both AUM and Run Command operations)
+retry:
+  max_attempts: 2                # Number of retries after first attempt
+  backoff_seconds: [30, 60]      # Wait time before each retry attempt
+
+  retriable_errors:
+    - "unable to connect"
+    - "vm busy"
+    - "operation in progress"
+    - "agent not responsive"
+    - "provisioning state"
+
+
+# Polling intervals (seconds)
+polling:
+  assessment_timeout: 600        # Max wait per VM assessment (10 min)
+  patch_timeout: 7200            # Max wait per VM patch operation (2 hr)
+  patch_status_interval: 30
+
+
+# Logging
+logging:
+  level: INFO
+  file: logs/aum_automation.log
+  max_size_mb: 10
+  backup_count: 5
+
+
+# Safety
+safety:
+  dry_run: false                 # Set true to simulate all operations without making changes
+  require_confirmation: true     # Prompt before destructive operations
+  max_concurrent_vms: 20        # Maximum VMs to process simultaneously

@@ -1,0 +1,28 @@
+# Saved Azure Resource Graph queries
+# These are used by the "Export Asset Inventory" and "Export Pre-Patch Data" buttons.
+# Names must match the query names saved in your Azure Resource Graph Explorer.
+# Leave empty if you are not using saved queries.
+
+queries:
+  complete_asset_details: ""     # Name of your saved asset inventory query
+  pre_patch_export: ""           # Name of your saved pre-patch data query
+
+# Inline fallback queries — used if the saved query cannot be retrieved from Azure.
+# These execute against all subscriptions in the selected tenant.
+inline_queries:
+  complete_asset_details: |
+    Resources
+    | where type == "microsoft.compute/virtualmachines"
+    | extend osType = properties.storageProfile.osDisk.osType
+    | extend powerState = properties.extended.instanceView.powerState.displayStatus
+    | project name, resourceGroup, location, osType, powerState, tags, subscriptionId
+    | order by name asc
+
+  pre_patch_export: |
+    Resources
+    | where type == "microsoft.compute/virtualmachines"
+    | extend osType = properties.storageProfile.osDisk.osType
+    | extend vmSize = properties.hardwareProfile.vmSize
+    | extend patchWave = tostring(tags.PatchWave)
+    | project name, resourceGroup, subscriptionId, osType, vmSize, patchWave, tags
+    | order by patchWave asc, name asc
