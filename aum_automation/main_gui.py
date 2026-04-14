@@ -10,6 +10,7 @@ import logging
 import os
 import sys
 import webbrowser
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
@@ -284,7 +285,7 @@ class AUMAutomationGUI:
         notebook.add(inventory_frame, text="VM Inventory")
         
         # VM list with scrollbar
-        columns = ('Name', 'Resource Group', 'OS Type', 'Power State', 'Type', 'Status', 'Last Checked')
+        columns = ('Name', 'Resource Group', 'OS Type', 'Power State', 'Type', 'Status', 'Health Check', 'Last Checked')
         self.vm_tree = ttk.Treeview(inventory_frame, columns=columns, show='headings', height=20)
         
         # Set column widths
@@ -295,6 +296,7 @@ class AUMAutomationGUI:
             'Power State': 100,
             'Type': 80,
             'Status': 100,
+            'Health Check': 320,
             'Last Checked': 150
         }
         
@@ -313,7 +315,7 @@ class AUMAutomationGUI:
         button_frame.grid(row=1, column=0, pady=10, sticky=tk.W)
         
         ttk.Button(button_frame, text="Start Deallocated VMs", command=self.start_deallocated_vms).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Run Health Gate", command=self.run_health_gate).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Run Health Gate (Current Tenant)", command=self.run_health_gate).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Check for Updates", command=self.check_for_updates).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Stop Check", command=self.stop_check_for_updates).pack(side=tk.LEFT, padx=5)
         ttk.Button(
@@ -420,8 +422,40 @@ class AUMAutomationGUI:
         logs_frame = ttk.Frame(notebook, padding="10")
         notebook.add(logs_frame, text="Logs")
         
-        self.logs_text = scrolledtext.ScrolledText(logs_frame, width=100, height=30)
+        self.logs_text = scrolledtext.ScrolledText(
+            logs_frame,
+            width=100,
+            height=30,
+            bg=self.colors['bg_medium'],
+            fg=self.colors['text'],
+            insertbackground=self.colors['text'],
+            font=('Courier', 10),
+            wrap=tk.WORD
+        )
         self.logs_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+
+        # Log styling tags for readability in dark mode
+        self.logs_text.tag_configure('log_ts', foreground=self.colors['text_dim'])
+        self.logs_text.tag_configure('level_INFO', foreground=self.colors['blue_light'])
+        self.logs_text.tag_configure('level_WARNING', foreground='#FFD166')
+        self.logs_text.tag_configure('level_ERROR', foreground='#FF6B6B')
+        self.logs_text.tag_configure('level_DEBUG', foreground='#B39DDB')
+
+        self.logs_text.tag_configure('status_success', foreground='#90EE90')
+        self.logs_text.tag_configure('status_failed', foreground='#FFB6C1')
+        self.logs_text.tag_configure('status_skip', foreground='#D3D3D3')
+        self.logs_text.tag_configure('status_progress', foreground='#FFD166')
+        self.logs_text.tag_configure('progress_counter', foreground='#7FDBFF')
+
+        self.logs_text.tag_configure('op_health', foreground='#6EC1FF')
+        self.logs_text.tag_configure('op_assess', foreground='#A5D8FF')
+        self.logs_text.tag_configure('op_patch', foreground='#C3F0CA')
+        self.logs_text.tag_configure('op_updates', foreground='#FFE08A')
+        self.logs_text.tag_configure('op_access', foreground='#B8C0FF')
+        self.logs_text.tag_configure('op_inventory', foreground='#9EE6FF')
+
+        self._vm_tag_palette = ['#7FDBFF', '#B8C0FF', '#A5D8FF', '#6EC1FF', '#8AE6CF', '#FFD6A5']
+        self._vm_tag_map = {}
         
         # Auto-scroll checkbox
         self.auto_scroll = tk.BooleanVar(value=True)
@@ -429,6 +463,83 @@ class AUMAutomationGUI:
         
         logs_frame.columnconfigure(0, weight=1)
         logs_frame.rowconfigure(0, weight=1)
+
+    def _apply_log_tag(self, line_start: str, start_char: int, end_char: int, tag: str):
+        if end_char <= start_char:
+            return
+        self.logs_text.tag_add(tag, f"{line_start}+{start_char}c", f"{line_start}+{end_char}c")
+
+    def _tag_vm_name(self, line_start: str, vm_name: str, full_entry: str):
+        if not vm_name:
+            return
+        start = full_entry.find(vm_name)
+        if start < 0:
+            return
+        if vm_name not in self._vm_tag_map:
+            idx = sum(ord(ch) for ch in vm_name) % len(self._vm_tag_palette)
+            tag = f"vm_name_{idx}"
+            if tag not in self._vm_tag_map.values():
+                self.logs_text.tag_configure(tag, foreground=self._vm_tag_palette[idx], font=('Courier', 10, 'bold'))
+            self._vm_tag_map[vm_name] = tag
+        self._apply_log_tag(line_start, start, start + len(vm_name), self._vm_tag_map[vm_name])
+
+    def _style_log_entry(self, line_start: str, log_entry: str, level: str, message: str):
+        ts_end = log_entry.find(']') + 1
+        self._apply_log_tag(line_start, 0, max(ts_end, 0), 'log_ts')
+
+        level_token = f"[{level}]"
+        level_start = log_entry.find(level_token)
+        if level_start >= 0:
+            self._apply_log_tag(
+                line_start,
+                level_start,
+                level_start + len(level_token),
+                f"level_{level}" if level in ('INFO', 'WARNING', 'ERROR', 'DEBUG') else 'level_INFO'
+            )
+
+        for m in re.finditer(r'\[\d+/\d+\]', log_entry):
+            self._apply_log_tag(line_start, m.start(), m.end(), 'progress_counter')
+
+        for token, tag in (('✓', 'status_success'), ('✗', 'status_failed'), ('⊘', 'status_skip')):
+            idx = log_entry.find(token)
+            if idx >= 0:
+                self._apply_log_tag(line_start, idx, idx + len(token), tag)
+        for token in ('PASS', 'passed'):
+            idx = log_entry.find(token)
+            if idx >= 0:
+                self._apply_log_tag(line_start, idx, idx + len(token), 'status_success')
+        for token in ('FAIL', 'failed', 'error'):
+            idx = log_entry.lower().find(token.lower())
+            if idx >= 0:
+                self._apply_log_tag(line_start, idx, idx + len(token), 'status_failed')
+        for token in ('Assessing', 'Running', 'Loading', 'Starting'):
+            idx = log_entry.find(token)
+            if idx >= 0:
+                self._apply_log_tag(line_start, idx, idx + len(token), 'status_progress')
+
+        msg_l = message.lower()
+        op_tag = None
+        if 'health gate' in msg_l:
+            op_tag = 'op_health'
+        elif 'assess' in msg_l:
+            op_tag = 'op_assess'
+        elif 'patch' in msg_l:
+            op_tag = 'op_patch'
+        elif 'update' in msg_l:
+            op_tag = 'op_updates'
+        elif 'access' in msg_l or 'authenticate' in msg_l or 'pim' in msg_l:
+            op_tag = 'op_access'
+        elif 'inventory' in msg_l:
+            op_tag = 'op_inventory'
+
+        if op_tag:
+            msg_start = log_entry.find(message)
+            if msg_start >= 0:
+                self._apply_log_tag(line_start, msg_start, msg_start + len(message), op_tag)
+
+        vm_match = re.search(r'[\] ]([A-Za-z0-9][A-Za-z0-9._-]{2,})\s*:', message)
+        if vm_match:
+            self._tag_vm_name(line_start, vm_match.group(1), log_entry)
     
     def setup_status_frame(self):
         """Setup status bar at bottom"""
@@ -446,14 +557,24 @@ class AUMAutomationGUI:
     def log_message(self, message, level='INFO'):
         """Add message to logs tab"""
         timestamp = datetime.now().strftime('%H:%M:%S')
+        level = (level or 'INFO').upper()
         log_entry = f"[{timestamp}] [{level}] {message}\n"
-        
+
+        line_start = self.logs_text.index(tk.END)
         self.logs_text.insert(tk.END, log_entry)
+        self._style_log_entry(line_start, log_entry, level, message)
         
         if self.auto_scroll.get():
             self.logs_text.see(tk.END)
-        
-        logger.info(message)
+
+        if level == 'ERROR':
+            logger.error(message)
+        elif level == 'WARNING':
+            logger.warning(message)
+        elif level == 'DEBUG':
+            logger.debug(message)
+        else:
+            logger.info(message)
     
     def update_status(self, message):
         """Update status bar"""
@@ -807,6 +928,7 @@ class AUMAutomationGUI:
         # Populate tree
         for vm in vms:
             status = "⚠️ Skip" if vm.get('should_skip') else "✓ Ready"
+            skip_reason = vm.get('skip_reason') or '-'
             last_checked = vm.get('last_checked', '-')
             
             self.vm_tree.insert('', tk.END, values=(
@@ -816,6 +938,7 @@ class AUMAutomationGUI:
                 vm.get('power_state', 'unknown'),
                 vm.get('type', 'Server'),
                 status,
+                skip_reason,
                 last_checked
             ))
         
@@ -1008,6 +1131,7 @@ class AUMAutomationGUI:
             values = self.vm_tree.item(item)['values']
             if values[0] == vm['name']:  # Match by VM name
                 status = "⚠️ Skip" if vm.get('should_skip') else "✓ Ready"
+                skip_reason = vm.get('skip_reason') or '-'
                 last_checked = vm.get('last_checked', '-')
                 
                 # Update the row
@@ -1018,6 +1142,7 @@ class AUMAutomationGUI:
                     vm.get('power_state', 'unknown'),
                     vm.get('type', 'Server'),
                     status,
+                    skip_reason,
                     last_checked
                 ))
                 break
@@ -1561,16 +1686,22 @@ class AUMAutomationGUI:
 
                 # Mark VMs that failed the gate
                 failed_names = []
+                failed_details = []
                 for vm in self.vms:
                     r = gate_results.get(vm['name'])
                     if r and not r.passed:
                         vm['health_gate_failed'] = True
                         vm['skip_reason'] = (vm.get('skip_reason') or '') + f" [health gate: {r.summary()}]"
                         failed_names.append(vm['name'])
+                        reason = "; ".join(r.fail_reasons) if r.fail_reasons else r.summary()
+                        failed_details.append((vm['name'], reason))
                     elif r and r.passed:
                         vm['health_gate_failed'] = False
 
-                self.root.after(0, lambda f=failed_names, t=total: self._on_health_gate_done(f, t))
+                self.root.after(
+                    0,
+                    lambda f=failed_names, d=failed_details, t=total: self._on_health_gate_done(f, t, d)
+                )
 
             except Exception as exc:
                 self.root.after(0, lambda e=str(exc): (
@@ -1581,15 +1712,20 @@ class AUMAutomationGUI:
 
         threading.Thread(target=_gate_thread, daemon=True).start()
 
-    def _on_health_gate_done(self, failed_names: list, total: int):
+    def _on_health_gate_done(self, failed_names: list, total: int, failed_details: list | None = None):
         self.progress.stop()
         passed = total - len(failed_names)
         msg = f"Health gate complete.\n\n✓ {passed}/{total} VMs passed."
         if failed_names:
             msg += f"\n\n✗ {len(failed_names)} VMs flagged and will be skipped:\n"
-            msg += "\n".join(f"  • {n}" for n in failed_names[:15])
-            if len(failed_names) > 15:
-                msg += f"\n  ... and {len(failed_names) - 15} more"
+            if failed_details:
+                msg += "\n".join(f"  • {name}: {reason}" for name, reason in failed_details[:12])
+                if len(failed_details) > 12:
+                    msg += f"\n  ... and {len(failed_details) - 12} more"
+            else:
+                msg += "\n".join(f"  • {n}" for n in failed_names[:15])
+                if len(failed_names) > 15:
+                    msg += f"\n  ... and {len(failed_names) - 15} more"
         self.update_status(f"Health gate: {passed}/{total} passed")
         messagebox.showinfo("Health Gate Results", msg)
 
@@ -1779,9 +1915,10 @@ class AUMAutomationGUI:
         """Run health gate for all tenants that have inventory loaded in DB."""
         messagebox.showinfo(
             "Health Gate — All Tenants",
-            "This will run health checks on VMs in DB.\n\n"
-            "Use 'Refresh All Inventories' first, then switch to each tenant tab "
-            "and use 'Run Health Gate' for targeted per-tenant checking with live tree updates.",
+            "This button is for cross-tenant orchestration.\n\n"
+            "• VM Inventory tab: 'Run Health Gate (Current Tenant)' updates that tenant's VM table live.\n"
+            "• All Tenants tab: 'Run Health Gate — All Tenants' is for running gate checks across all tenants after "
+            "'Refresh All Inventories'.",
         )
 
     def _stop_all_operations(self):
